@@ -1,9 +1,10 @@
 from llama_index.vector_stores.pinecone import PineconeVectorStore
 from pinecone import Pinecone, ServerlessSpec
 from dotenv import load_dotenv
-import os
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings, StorageContext
 from llama_index.embeddings.openai import OpenAIEmbedding
+import os
+import requests
 
 load_dotenv()
 
@@ -75,14 +76,12 @@ def create_llama_embeddings():
         
         # Load documents from directory
         documents = SimpleDirectoryReader("../lecture_bot/public/content").load_data()
-        print(f"Loaded {len(documents)} documents")
         
         # Create vector store index
         vector_store = get_pinecone_index()  # Your existing Pinecone setup
         if not vector_store:
             raise ValueError("Failed to create Pinecone vector store")
         
-        print("Starting to create index and embed documents...")
 
         # Use Pinecone storage explicitly
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
@@ -94,14 +93,39 @@ def create_llama_embeddings():
             show_progress=True,
         )
 
-
-        # print("Verifying index creation...")
-        # query_engine = index.as_query_engine()
-        # test_query = "test"  # Simple test query
-        # response = query_engine.query(test_query)
-        # print(f"Test query response received: {response}")
-        print(f"Index successfully created and stored in Pinecone! {index}")
         return index
     except Exception as e:
         print(f"Error creating embeddings: {e}")
+        return False
+
+
+def query_llama(prompt):
+    """Retrieve relevant docs from Pinecone and get response from Llama API."""
+    try:
+        # Load vector store
+        vector_store = get_pinecone_index()
+        storage_context = StorageContext.from_defaults(vector_store=vector_store)
+        
+        # Load the index from Pinecone
+        index = VectorStoreIndex.from_vector_store(vector_store=vector_store, storage_context=storage_context)
+        query_engine = index.as_query_engine()
+
+        # Retrieve relevant documents
+        retrieved_doc = query_engine.query(prompt)
+
+        # Call Hugging Face Llama API
+        API_URL = "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct"  # Change model if needed
+        HEADERS = {"Authorization": f"Bearer {os.getenv('HUGGINGFACE_API_KEY')}"}
+
+        payload = {
+            "inputs": f"Context:\n{retrieved_doc}\n\nUser Query:\n{prompt}\n\nAnswer:",
+            "parameters": {"max_new_tokens": 500}
+        }
+
+        response = requests.post(API_URL, headers=HEADERS, json=payload)
+        result = response.json()
+        return result[0]["generated_text"] if "generated_text" in result[0] else "Error: Invalid response."
+
+    except Exception as e:
+        print(f"Error querying Llama: {e}")
         return False
